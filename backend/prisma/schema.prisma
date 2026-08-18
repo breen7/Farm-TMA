@@ -1,0 +1,245 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // DATABASE_URL: conexion que usa la app en runtime (puede ser pooled, ej.
+  // el pooler de Supabase). DIRECT_URL: conexion directa sin pooling que usa
+  // `prisma migrate`/`db push` — con PgBouncer en modo transaccion, las
+  // migraciones fallan o se cuelgan sin esta separacion. Si tu Postgres no
+  // tiene pooler (ej. Docker local), ambas pueden apuntar a la misma URL.
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum TxType {
+  AD_REWARD
+  REFERRAL_COMMISSION
+  TASK_REWARD
+  RESOURCE_SALE
+  SINK_BOOST
+  SINK_STORAGE
+  SINK_ROULETTE
+  WITHDRAWAL
+  ADMIN_ADJUSTMENT
+}
+
+enum TxCurrency {
+  COINS
+  BUCKS
+}
+
+enum WithdrawalStatus {
+  PENDING
+  QUEUED
+  RISK_REVIEW
+  PROCESSING
+  COMPLETED
+  FAILED
+  REJECTED
+}
+
+enum CountryTier {
+  T1
+  T2
+  T3
+}
+
+enum ImpressionStatus {
+  CONFIRMED
+  SUSPECT
+  REJECTED
+}
+
+model User {
+  id             BigInt   @id @default(autoincrement())
+  telegramId     BigInt   @unique @map("telegram_id")
+  username       String?
+  firstName      String?  @map("first_name")
+  languageCode   String?  @map("language_code")
+  countryTier    CountryTier @default(T3) @map("country_tier")
+  ipHash         String?  @map("ip_hash")
+  deviceFpHash   String?  @map("device_fp_hash")
+  referredBy     BigInt?  @map("referred_by")
+  referrer       User?    @relation("Referrals", fields: [referredBy], references: [id])
+  referredUsers  User[]   @relation("Referrals")
+  tonWallet      String?  @map("ton_wallet")
+  coinsBalance   Decimal  @default(0) @map("coins_balance") @db.Decimal(20, 4)
+  bucksBalance   Decimal  @default(0) @map("bucks_balance") @db.Decimal(20, 6)
+  riskScore      Int      @default(0) @map("risk_score")
+  isBanned       Boolean  @default(false) @map("is_banned")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  farm                Farm?
+  inventories         Inventory[]
+  adImpressions       AdImpression[]
+  transactions        Transaction[]
+  withdrawalRequests  WithdrawalRequest[]
+  ancestorOf          ReferralTree[] @relation("Ancestor")
+  descendantOf        ReferralTree[] @relation("Descendant")
+  taskProgress        UserTaskProgress[]
+  deposits            DepositRequest[]
+
+  @@index([ipHash])
+  @@map("users")
+}
+
+model Farm {
+  id                BigInt    @id @default(autoincrement())
+  userId            BigInt    @unique @map("user_id")
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level             Int       @default(1)
+  storageCapacity   Decimal   @default(1000) @map("storage_capacity") @db.Decimal(20, 4)
+  productionRate    Json      @default("{\"wheat\":1,\"eggs\":0.5,\"milk\":0.2}") @map("production_rate")
+  boostExpiresAt    DateTime? @map("boost_expires_at")
+  lastCollectedAt   DateTime  @default(now()) @map("last_collected_at")
+  serverSeed        String    @map("server_seed")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  @@map("farms")
+}
+
+model Inventory {
+  id         BigInt   @id @default(autoincrement())
+  userId     BigInt   @map("user_id")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resource   String
+  quantity   Decimal  @default(0) @db.Decimal(20, 4)
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, resource])
+  @@map("inventories")
+}
+
+model AdImpression {
+  id                BigInt            @id @default(autoincrement())
+  userId            BigInt            @map("user_id")
+  user              User              @relation(fields: [userId], references: [id])
+  network           String
+  placementId       String?           @map("placement_id")
+  ecpmUsedUsd       Decimal           @map("ecpm_used_usd") @db.Decimal(10, 4)
+  rewardBucks       Decimal           @map("reward_bucks") @db.Decimal(20, 6)
+  webhookSignature  String            @map("webhook_signature")
+  idempotencyKey    String            @unique @map("idempotency_key")
+  status            ImpressionStatus  @default(CONFIRMED)
+  createdAt         DateTime          @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@map("ad_impressions")
+}
+
+model Transaction {
+  id            BigInt     @id @default(autoincrement())
+  userId        BigInt     @map("user_id")
+  user          User       @relation(fields: [userId], references: [id])
+  type          TxType
+  currency      TxCurrency
+  amount        Decimal    @db.Decimal(20, 6)
+  balanceAfter  Decimal    @map("balance_after") @db.Decimal(20, 6)
+  refId         BigInt?    @map("ref_id")
+  metadata      Json?
+  createdAt     DateTime   @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@map("transactions")
+}
+
+model ReferralTree {
+  id          BigInt @id @default(autoincrement())
+  userId      BigInt @map("user_id")
+  descendant  User   @relation("Descendant", fields: [userId], references: [id])
+  ancestorId  BigInt @map("ancestor_id")
+  ancestor    User   @relation("Ancestor", fields: [ancestorId], references: [id])
+  depth       Int
+
+  @@unique([userId, ancestorId])
+  @@index([ancestorId, depth])
+  @@map("referral_tree")
+}
+
+model WithdrawalRequest {
+  id                     BigInt            @id @default(autoincrement())
+  userId                 BigInt            @map("user_id")
+  user                   User              @relation(fields: [userId], references: [id])
+  amountBucks            Decimal           @map("amount_bucks") @db.Decimal(20, 6)
+  amountUsd              Decimal           @map("amount_usd") @db.Decimal(20, 6)
+  asset                  String
+  destinationWallet      String            @map("destination_wallet")
+  status                 WithdrawalStatus  @default(PENDING)
+  riskScoreSnapshot      Int               @map("risk_score_snapshot")
+  txHash                 String?           @map("tx_hash")
+  poolBalanceSnapshot    Decimal?          @map("pool_balance_snapshot") @db.Decimal(20, 6)
+  processingStartedAt    DateTime?         @map("processing_started_at")
+  processedAt            DateTime?         @map("processed_at")
+  createdAt              DateTime          @default(now()) @map("created_at")
+
+  @@index([status, createdAt])
+  @@map("withdrawal_requests")
+}
+
+model EcpmRate {
+  id           BigInt      @id @default(autoincrement())
+  network      String
+  countryTier  CountryTier @map("country_tier")
+  ecpmUsd      Decimal     @map("ecpm_usd") @db.Decimal(10, 4)
+  alpha        Decimal     @default(0.65) @db.Decimal(4, 3)
+  beta         Decimal     @default(0.90) @db.Decimal(4, 3)
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  @@unique([network, countryTier])
+  @@map("ecpm_rates")
+}
+
+// Las definiciones de tareas (titulo, recompensa, meta) viven en codigo
+// (src/tasks/tasks.constants.ts), no en tabla: son pocas y cambian junto al
+// codigo que las completa, igual que las tasas de referidos o de boost. Esta
+// tabla solo guarda el progreso por usuario, referenciando esas definiciones
+// por su `taskCode`.
+model UserTaskProgress {
+  id          BigInt    @id @default(autoincrement())
+  userId      BigInt    @map("user_id")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskCode    String    @map("task_code")
+  progress    Int       @default(0)
+  completedAt DateTime? @map("completed_at")
+  claimedAt   DateTime? @map("claimed_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@unique([userId, taskCode])
+  @@map("user_task_progress")
+}
+
+enum DepositStatus {
+  PENDING
+  CONFIRMED
+  EXPIRED
+  FAILED
+}
+
+// `network`/`asset` son String (no enum) a proposito, mismo patron que
+// WithdrawalRequest.asset: se viene mas adelante USDT en BSC/TRON ademas de
+// TON, y agregar un valor nuevo no deberia pedir una migracion. La
+// validacion de que networks/assets son soportados hoy vive en el DTO.
+model DepositRequest {
+  id               BigInt        @id @default(autoincrement())
+  userId           BigInt        @map("user_id")
+  user             User          @relation(fields: [userId], references: [id])
+  network          String
+  asset            String
+  amount           Decimal       @db.Decimal(20, 6)
+  amountUsd        Decimal       @map("amount_usd") @db.Decimal(20, 6)
+  purpose          String
+  purposeMetadata  Json?         @map("purpose_metadata")
+  depositReference String        @unique @map("deposit_reference")
+  treasuryWallet   String        @map("treasury_wallet")
+  status           DepositStatus @default(PENDING)
+  txHash           String?       @map("tx_hash")
+  expiresAt        DateTime      @map("expires_at")
+  confirmedAt      DateTime?     @map("confirmed_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  @@index([status, expiresAt])
+  @@map("deposit_requests")
+}
