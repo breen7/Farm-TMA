@@ -4,6 +4,10 @@
 
 FROM node:20-slim AS build
 WORKDIR /app
+# Prisma necesita libssl para detectar que motor de query engine descargar
+# (node:20-slim no lo trae por defecto) - sin esto "prisma generate" falla
+# en tiempo de build.
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
 RUN npm ci
 COPY . .
@@ -13,6 +17,10 @@ RUN npm run build
 FROM node:20-slim AS production
 WORKDIR /app
 ENV NODE_ENV=production
+
+# Mismo motivo que en el stage de build: "prisma migrate deploy" y el
+# @prisma/client corren en esta imagen en runtime, tambien necesitan libssl.
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
