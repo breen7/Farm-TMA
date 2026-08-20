@@ -7,23 +7,6 @@ import { useCurrentUser } from './lib/auth';
 
 type Tab = 'farm' | 'storage' | 'tasks' | 'withdraw';
 
-/**
- * TEMPORAL — solo para diagnosticar el problema de cache del WebView de
- * Telegram sirviendo un bundle viejo. Muestra en pantalla, sin depender de
- * la consola (inaccesible en el WebView), que build/commit y que valores de
- * env vars esta corriendo *este* cliente puntual. Sacar una vez resuelto.
- */
-function DebugPanel() {
-  const env = import.meta.env;
-  return (
-    <div className="fixed inset-x-0 top-0 z-[9999] break-all bg-black/90 px-2 py-1 font-mono text-[10px] leading-tight text-lime-300">
-      build={__BUILD_COMMIT__} @ {__BUILD_TIME__} | API={env.VITE_API_URL || '(vacio)'} | BOT=
-      {env.VITE_BOT_USERNAME || '(vacio)'} | APP={env.VITE_MINI_APP_SHORT_NAME || '(vacio)'} | MANIFEST=
-      {env.VITE_TONCONNECT_MANIFEST_URL || '(vacio, usa fallback)'}
-    </div>
-  );
-}
-
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'farm', label: 'Granja', icon: '🌾' },
   { id: 'storage', label: 'Almacen', icon: '📦' },
@@ -38,15 +21,13 @@ export default function App() {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-farm-bg text-farm-text-dim">
-        <DebugPanel />
         Cargando...
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-farm-bg pt-5 text-farm-text">
-      <DebugPanel />
+    <div className="flex min-h-screen flex-col bg-farm-bg text-farm-text">
       {error && (
         <p className="bg-farm-danger/20 p-2 text-center text-sm text-farm-danger">No se pudo iniciar sesión: {error}</p>
       )}
