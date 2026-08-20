@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Farm, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TasksService } from '../tasks/tasks.service';
-import { RESOURCE_SELL_PRICES } from './farm.constants';
+import { ANIMAL_TIERS, RESOURCE_SELL_PRICES } from './farm.constants';
 
 const HOUR_MS = 3_600_000;
 const INITIAL_STORAGE_CAPACITY = 1000; // debe coincidir con el @default() de Farm.storageCapacity en schema.prisma
@@ -81,10 +81,19 @@ export class FarmService {
     const farm = await this.getFarmOrThrow(userId);
     const { produced, wasCapped } = this.computePendingProduction(farm);
 
+    const tiers = farm.animalTiers as unknown as Record<string, number>;
+    const nextAnimalUpgradeCosts: Record<string, number | null> = {};
+    for (const [resource, config] of Object.entries(ANIMAL_TIERS)) {
+      const tier = tiers[resource] ?? 1;
+      nextAnimalUpgradeCosts[resource] = tier < config.ratesPerHour.length ? config.upgradeCostsCoins[tier - 1] : null;
+    }
+
     return {
       level: farm.level,
       storageCapacity: farm.storageCapacity,
       productionRate: farm.productionRate,
+      animalTiers: farm.animalTiers,
+      nextAnimalUpgradeCosts,
       boostExpiresAt: farm.boostExpiresAt,
       lastCollectedAt: farm.lastCollectedAt,
       pendingProduction: produced,
@@ -269,6 +278,75 @@ export class FarmService {
         storageCapacity: updatedFarm.storageCapacity,
         coinsBalance: updatedUser.coinsBalance,
         nextUpgradeCost: Math.round(cost * multiplier),
+      };
+    });
+  }
+
+  /**
+   * Sube el tier de un animal (eggs/milk), subiendo permanentemente su tasa
+   * de produccion en productionRate - a diferencia del boost, que es
+   * temporal y se aplica como multiplicador en tiempo de cosecha, esto
+   * cambia la tasa base guardada. Pagado en Coins, mismo patron de sink que
+   * upgradeStorage.
+   */
+  async upgradeAnimal(userId: bigint, resource: string) {
+    const config = ANIMAL_TIERS[resource];
+    if (!config) {
+      throw new BadRequestException(`Unknown animal resource: ${resource}`);
+    }
+
+    const farm = await this.getFarmOrThrow(userId);
+    const tiers = farm.animalTiers as unknown as Record<string, number>;
+    const currentTier = tiers[resource] ?? 1;
+
+    if (currentTier >= config.ratesPerHour.length) {
+      throw new BadRequestException(`${resource} is already at max tier`);
+    }
+
+    const cost = config.upgradeCostsCoins[currentTier - 1];
+    const newTier = currentTier + 1;
+    const newRate = config.ratesPerHour[newTier - 1];
+
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
+      if (Number(user.coinsBalance) < cost) {
+        throw new BadRequestException('Insufficient coins balance for animal upgrade');
+      }
+
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: { coinsBalance: { decrement: cost } },
+      });
+
+      await tx.transaction.create({
+        data: {
+          userId,
+          type: 'SINK_ANIMAL_UPGRADE',
+          currency: 'COINS',
+          amount: -cost,
+          balanceAfter: updatedUser.coinsBalance,
+          metadata: { resource, newTier, newRate } as Prisma.InputJsonValue,
+        },
+      });
+
+      const rates = farm.productionRate as unknown as ProductionRates;
+      const updatedFarm = await tx.farm.update({
+        where: { userId },
+        data: {
+          animalTiers: { ...tiers, [resource]: newTier },
+          productionRate: { ...rates, [resource]: newRate },
+        },
+      });
+
+      const nextCost =
+        newTier < config.ratesPerHour.length ? config.upgradeCostsCoins[newTier - 1] : null;
+
+      return {
+        resource,
+        tier: newTier,
+        productionRate: updatedFarm.productionRate,
+        coinsBalance: updatedUser.coinsBalance,
+        nextUpgradeCost: nextCost,
       };
     });
   }

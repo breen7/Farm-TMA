@@ -5,6 +5,8 @@ export interface FarmState {
   level: number;
   storageCapacity: string;
   productionRate: Record<string, number>;
+  animalTiers: Record<string, number>;
+  nextAnimalUpgradeCosts: Record<string, number | null>;
   boostExpiresAt: string | null;
   lastCollectedAt: string;
   pendingProduction: Record<string, number>;
@@ -40,6 +42,14 @@ export interface UpgradeStorageResult {
   storageCapacity: string;
   coinsBalance: string;
   nextUpgradeCost: number;
+}
+
+export interface UpgradeAnimalResult {
+  resource: string;
+  tier: number;
+  productionRate: Record<string, number>;
+  coinsBalance: string;
+  nextUpgradeCost: number | null;
 }
 
 export type DepositStatus = 'PENDING' | 'CONFIRMED' | 'EXPIRED' | 'FAILED';

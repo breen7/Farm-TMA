@@ -20,6 +20,7 @@ enum TxType {
   RESOURCE_SALE
   SINK_BOOST
   SINK_STORAGE
+  SINK_ANIMAL_UPGRADE
   SINK_ROULETTE
   WITHDRAWAL
   ADMIN_ADJUSTMENT
@@ -93,6 +94,7 @@ model Farm {
   level             Int       @default(1)
   storageCapacity   Decimal   @default(1000) @map("storage_capacity") @db.Decimal(20, 4)
   productionRate    Json      @default("{\"wheat\":1,\"eggs\":0.5,\"milk\":0.2}") @map("production_rate")
+  animalTiers       Json      @default("{\"eggs\":1,\"milk\":1}") @map("animal_tiers")
   boostExpiresAt    DateTime? @map("boost_expires_at")
   lastCollectedAt   DateTime  @default(now()) @map("last_collected_at")
   serverSeed        String    @map("server_seed")

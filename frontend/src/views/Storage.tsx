@@ -3,12 +3,17 @@ import { api, ApiError } from '../api/client';
 import { useCurrentUser } from '../lib/auth';
 import { RESOURCE_SELL_PRICES } from '../lib/farmEconomy';
 import { ArrowUpIcon, CoinIcon } from '../lib/icons';
-import type { FarmState, InventoryEntry, SellResult, UpgradeStorageResult } from '../types';
+import type { FarmState, InventoryEntry, SellResult, UpgradeAnimalResult, UpgradeStorageResult } from '../types';
 
 const RESOURCE_EMOJI: Record<string, string> = {
   wheat: '🌾',
   eggs: '🥚',
   milk: '🥛',
+};
+
+const ANIMAL_INFO: Record<string, { name: string; icon: string }> = {
+  eggs: { name: 'Gallinas', icon: '🐔' },
+  milk: { name: 'Vacas', icon: '🐄' },
 };
 
 export function StorageView() {
@@ -19,6 +24,7 @@ export function StorageView() {
   const [notice, setNotice] = useState<string | null>(null);
   const [sellingResource, setSellingResource] = useState<string | null>(null);
   const [upgrading, setUpgrading] = useState(false);
+  const [upgradingAnimal, setUpgradingAnimal] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -75,6 +81,21 @@ export function StorageView() {
     }
   };
 
+  const upgradeAnimal = async (resource: string) => {
+    setUpgradingAnimal(resource);
+    setError(null);
+    try {
+      const result = await api.post<UpgradeAnimalResult>('/farm/upgrade-animal', { resource });
+      const name = ANIMAL_INFO[resource]?.name ?? resource;
+      setNotice(`${name} mejorada a Tier ${result.tier} · nueva tasa: ${(result.productionRate[resource] ?? 0).toFixed(2)}/h`);
+      await Promise.all([load(), refreshUser()]);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'No se pudo mejorar el animal.');
+    } finally {
+      setUpgradingAnimal(null);
+    }
+  };
+
   const pendingTotal = farm ? Object.values(farm.pendingProduction).reduce((sum, value) => sum + value, 0) : 0;
   const capacity = farm ? Number(farm.storageCapacity) : 0;
   const fillRatio = capacity > 0 ? Math.min(pendingTotal / capacity, 1) : 0;
@@ -119,6 +140,49 @@ export function StorageView() {
             <ArrowUpIcon />
             Mejorar silo (+500)
           </button>
+        </div>
+      )}
+
+      {farm && (
+        <div className="flex flex-col gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-farm-text-dim">Animales</h2>
+          {Object.entries(ANIMAL_INFO).map(([resource, info]) => {
+            const tier = farm.animalTiers[resource] ?? 1;
+            const rate = farm.productionRate[resource] ?? 0;
+            const nextCost = farm.nextAnimalUpgradeCosts[resource] ?? null;
+            return (
+              <div
+                key={resource}
+                className="flex items-center justify-between gap-3 rounded-2xl border border-farm-border bg-gradient-to-b from-farm-surface-hi to-farm-surface p-3"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/40 text-xl">
+                    {info.icon}
+                  </span>
+                  <div>
+                    <p className="text-sm font-medium text-farm-text">
+                      {info.name} · Tier {tier}
+                    </p>
+                    <p className="text-sm font-semibold text-[#4ade80]">{rate.toFixed(2)}/h</p>
+                  </div>
+                </div>
+                {nextCost === null ? (
+                  <span className="whitespace-nowrap rounded-full bg-black/40 px-3 py-1.5 text-sm font-semibold text-farm-text-dim">
+                    Nivel máximo
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => upgradeAnimal(resource)}
+                    disabled={upgradingAnimal === resource}
+                    className="flex items-center gap-1.5 whitespace-nowrap rounded-full border border-amber-400/80 px-3 py-1.5 text-sm font-semibold text-amber-300 disabled:opacity-50"
+                  >
+                    <ArrowUpIcon />
+                    Mejorar ({nextCost} coins)
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

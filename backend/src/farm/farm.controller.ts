@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TelegramAuthGuard } from '../common/guards/telegram-auth.guard';
 import { CurrentTelegramUser, VerifiedTelegramUser } from '../common/decorators/current-user.decorator';
 import { SellResourceDto } from './dto/sell-resource.dto';
+import { UpgradeAnimalDto } from './dto/upgrade-animal.dto';
 
 @Controller('farm')
 @UseGuards(TelegramAuthGuard)
@@ -47,5 +48,11 @@ export class FarmController {
   async upgradeStorage(@CurrentTelegramUser() tgUser: VerifiedTelegramUser) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { telegramId: BigInt(tgUser.id) } });
     return this.farmService.upgradeStorage(user.id);
+  }
+
+  @Post('upgrade-animal')
+  async upgradeAnimal(@CurrentTelegramUser() tgUser: VerifiedTelegramUser, @Body() dto: UpgradeAnimalDto) {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { telegramId: BigInt(tgUser.id) } });
+    return this.farmService.upgradeAnimal(user.id, dto.resource);
   }
 }
