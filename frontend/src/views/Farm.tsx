@@ -257,7 +257,7 @@ const FarmPlots = forwardRef<FarmPlotsHandle, FarmPlotsProps>(function FarmPlots
 const AD_CREDIT_GRACE_MS = 4000;
 
 function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
-  const [status, setStatus] = useState<'idle' | 'playing' | 'confirming' | 'reward' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'playing' | 'confirming' | 'reward' | 'error' | 'unavailable'>('idle');
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [rewardBalance, setRewardBalance] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -270,6 +270,14 @@ function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
    * cliente "diga" que vio el anuncio. show() resolviendo solo significa que
    * el usuario miro el anuncio completo — despues hay que esperar un rato a
    * que el postback llegue y recien ahi refrescar el balance.
+   *
+   * Si show() rechaza (ej. el block todavia esta en moderacion: "Block X is
+   * not active"), en produccion no tiene sentido invitar a "reintentar" — el
+   * simulador tambien esta bloqueado ahi (NODE_ENV=production), asi que no
+   * hay ningun camino que vaya a funcionar hasta que Adsgram apruebe el
+   * block. Mostramos el mismo estado neutro que cuando no hay block
+   * configurado, en vez de un error que sugiere que algo esta roto. En dev
+   * mostramos el error real, para poder debuggear el SDK.
    */
   const watchRealAd = async () => {
     setError(null);
@@ -281,9 +289,13 @@ function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
       await refreshUser();
       setStatus('reward');
       onRewarded();
-    } catch {
-      setError('No se pudo mostrar el anuncio. Probá de nuevo en unos segundos.');
-      setStatus('error');
+    } catch (err) {
+      if (import.meta.env.PROD) {
+        setStatus('unavailable');
+      } else {
+        setError(`SDK de Adsgram: ${JSON.stringify(err)}`);
+        setStatus('error');
+      }
     }
   };
 
@@ -305,10 +317,11 @@ function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
 
   const watchAd = ADSGRAM_BLOCK_ID ? watchRealAd : watchSimulatedAd;
 
-  // Sin block real configurado y en produccion, /ads/simulate esta bloqueado
-  // server-side (NODE_ENV=production) - mejor mostrar un estado neutro que
-  // un boton que siempre tira error.
-  if (!ADSGRAM_BLOCK_ID && import.meta.env.PROD) {
+  // Sin block real configurado (o configurado pero fallando, ej. en
+  // moderacion) y en produccion, /ads/simulate esta bloqueado server-side
+  // (NODE_ENV=production) - no hay ningun camino funcional, mejor un estado
+  // neutro que un boton que siempre tira error o un popup nativo del SDK.
+  if ((!ADSGRAM_BLOCK_ID || status === 'unavailable') && import.meta.env.PROD) {
     return (
       <div className="rounded-2xl bg-[#86b565]/40 p-4">
         <p className="font-bold text-[#1c2b16]">Gana Pulso extra</p>
