@@ -1,11 +1,14 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { TonConnectButton, useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
 import { api, ApiError } from '../api/client';
-import { playSimulatedAd } from '../lib/ads';
+import { playSimulatedAd, useAdsgram } from '../lib/ads';
+import { useCurrentUser } from '../lib/auth';
 import { buildDepositTransaction } from '../lib/deposits';
 import { getResourceAccentColor, getResourceSprite } from '../lib/farmSprites';
 import { BasketIcon, BoltIcon, PlayIcon } from '../lib/icons';
 import type { AdRewardResult, CollectResult, DepositIntent, FarmState } from '../types';
+
+const ADSGRAM_BLOCK_ID = import.meta.env.VITE_ADSGRAM_BLOCK_ID || '';
 
 const DEPOSIT_POLL_INTERVAL_MS = 3000;
 const DEPOSIT_MAX_POLLS = 40; // ~2 minutos de polling activo; el backend sigue verificando aunque el frontend deje de preguntar
@@ -250,13 +253,42 @@ const FarmPlots = forwardRef<FarmPlotsHandle, FarmPlotsProps>(function FarmPlots
   );
 });
 
+/** Tiempo estimado hasta que el postback server-a-server de Adsgram nos llega y acredita la recompensa. */
+const AD_CREDIT_GRACE_MS = 4000;
+
 function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
-  const [status, setStatus] = useState<'idle' | 'playing' | 'reward' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'playing' | 'confirming' | 'reward' | 'error'>('idle');
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [rewardBalance, setRewardBalance] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { refresh: refreshUser } = useCurrentUser();
+  const showRealAd = useAdsgram(ADSGRAM_BLOCK_ID || undefined);
 
-  const watchAd = async () => {
+  /**
+   * Camino real: Adsgram confirma el reward con un GET server-a-server
+   * independiente (ver GET /ads/webhook en el backend), nunca porque el
+   * cliente "diga" que vio el anuncio. show() resolviendo solo significa que
+   * el usuario miro el anuncio completo — despues hay que esperar un rato a
+   * que el postback llegue y recien ahi refrescar el balance.
+   */
+  const watchRealAd = async () => {
+    setError(null);
+    setStatus('playing');
+    try {
+      await showRealAd();
+      setStatus('confirming');
+      await new Promise((resolve) => setTimeout(resolve, AD_CREDIT_GRACE_MS));
+      await refreshUser();
+      setStatus('reward');
+      onRewarded();
+    } catch {
+      setError('No se pudo mostrar el anuncio. Probá de nuevo en unos segundos.');
+      setStatus('error');
+    }
+  };
+
+  /** Camino simulado (dev, o produccion mientras el block real sigue en moderacion). */
+  const watchSimulatedAd = async () => {
     setError(null);
     setStatus('playing');
     await playSimulatedAd(setSecondsLeft);
@@ -271,7 +303,21 @@ function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
     }
   };
 
-  if (status === 'playing') {
+  const watchAd = ADSGRAM_BLOCK_ID ? watchRealAd : watchSimulatedAd;
+
+  // Sin block real configurado y en produccion, /ads/simulate esta bloqueado
+  // server-side (NODE_ENV=production) - mejor mostrar un estado neutro que
+  // un boton que siempre tira error.
+  if (!ADSGRAM_BLOCK_ID && import.meta.env.PROD) {
+    return (
+      <div className="rounded-2xl bg-[#86b565]/40 p-4">
+        <p className="font-bold text-[#1c2b16]">Gana Pulso extra</p>
+        <p className="text-sm text-[#1c2b16]/70">Los anuncios reales llegan pronto.</p>
+      </div>
+    );
+  }
+
+  if (status === 'playing' && !ADSGRAM_BLOCK_ID) {
     return (
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/90">
         <p className="text-sm text-farm-text-dim">Anuncio simulado (Adsgram)</p>
@@ -285,8 +331,14 @@ function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
     <div className="flex items-center justify-between gap-3 rounded-2xl bg-[#86b565] p-4">
       <div>
         <p className="font-bold text-[#1c2b16]">Gana Pulso extra</p>
-        {status === 'reward' && rewardBalance ? (
+        {status === 'playing' ? (
+          <p className="text-sm text-[#1c2b16]/80">Reproduciendo anuncio...</p>
+        ) : status === 'confirming' ? (
+          <p className="text-sm text-[#1c2b16]/80">¡Gracias! Acreditando recompensa...</p>
+        ) : status === 'reward' && rewardBalance ? (
           <p className="text-sm text-[#1c2b16]/80">Recompensa acreditada · Balance: {rewardBalance} Pulso</p>
+        ) : status === 'reward' ? (
+          <p className="text-sm text-[#1c2b16]/80">¡Recompensa acreditada!</p>
         ) : status === 'error' && error ? (
           <p className="text-sm text-red-900">{error}</p>
         ) : (
@@ -295,7 +347,8 @@ function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
       </div>
       <button
         onClick={watchAd}
-        className="flex items-center gap-1.5 whitespace-nowrap rounded-xl bg-farm-accent px-4 py-2 font-semibold text-[#1c2b16]"
+        disabled={status === 'playing' || status === 'confirming'}
+        className="flex items-center gap-1.5 whitespace-nowrap rounded-xl bg-farm-accent px-4 py-2 font-semibold text-[#1c2b16] disabled:opacity-50"
       >
         <PlayIcon />
         Ver anuncio

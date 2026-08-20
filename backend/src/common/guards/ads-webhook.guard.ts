@@ -9,9 +9,12 @@ const NETWORK_SECRET_ENV: Record<string, string> = {
 };
 
 /**
- * Verifica el header X-Webhook-Secret contra el secreto configurado para la
- * red de anuncios indicada en el body. Comparacion en tiempo constante para
- * evitar timing attacks sobre el secreto.
+ * Verifica el secreto configurado para la red de anuncios indicada, contra
+ * el header X-Webhook-Secret (redes que llaman con POST + headers custom) o
+ * el query param `secret` (redes como Adsgram, que confirman el reward con
+ * un GET simple a una URL que nosotros mismos armamos en su dashboard, sin
+ * poder mandar headers propios - el secreto viaja embebido en esa URL).
+ * Comparacion en tiempo constante para evitar timing attacks.
  */
 @Injectable()
 export class AdsWebhookGuard implements CanActivate {
@@ -19,14 +22,14 @@ export class AdsWebhookGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<Request>();
-    const network = req.body?.network as string | undefined;
-    const provided = req.headers['x-webhook-secret'] as string | undefined;
+    const network = (req.body?.network ?? req.query?.network) as string | undefined;
+    const provided = (req.headers['x-webhook-secret'] ?? req.query?.secret) as string | undefined;
 
     if (!network || !NETWORK_SECRET_ENV[network]) {
       throw new UnauthorizedException('Unknown or missing ad network');
     }
     if (!provided) {
-      throw new UnauthorizedException('Missing X-Webhook-Secret header');
+      throw new UnauthorizedException('Missing webhook secret (X-Webhook-Secret header or secret query param)');
     }
 
     const expected = this.config.getOrThrow<string>(NETWORK_SECRET_ENV[network]);

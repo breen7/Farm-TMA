@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { AdsService } from './ads.service';
@@ -19,6 +19,29 @@ export class AdsController {
   @UseGuards(AdsWebhookGuard)
   async webhook(@Body() dto: AdWebhookDto) {
     return this.adsService.creditAdReward(dto);
+  }
+
+  /**
+   * Adsgram (y en general redes que confirman el reward con un simple GET a
+   * una URL que nosotros configuramos en su dashboard, sin poder mandar
+   * headers custom) llaman aca. La URL a cargar en Adsgram es:
+   *   .../ads/webhook?userid=[userId]&network=adsgram&secret=<ADSGRAM_WEBHOOK_SECRET>
+   * `[userId]` lo reemplaza Adsgram por el Telegram ID real; `network` y
+   * `secret` son estaticos, los agregamos nosotros al configurar la URL.
+   */
+  @Get('webhook')
+  @UseGuards(AdsWebhookGuard)
+  async webhookGet(@Query('userid') userid: string, @Query('network') network: 'adsgram' | 'monetag') {
+    const telegramUserId = Number(userid);
+    if (!Number.isFinite(telegramUserId)) {
+      throw new BadRequestException('Invalid userid');
+    }
+
+    return this.adsService.creditAdReward({
+      telegramUserId,
+      network,
+      timestamp: Date.now(),
+    });
   }
 
   /**
