@@ -7,7 +7,7 @@ import { CheckIcon, CopyIcon, GiftIcon, ShareIcon } from '../lib/icons';
 import type { ClaimTaskResult, ReferralTree, TaskEntry } from '../types';
 
 function ReferralCard() {
-  const { user } = useCurrentUser();
+  const { user, loading: authLoading, error: authError } = useCurrentUser();
   const [tree, setTree] = useState<ReferralTree | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -47,7 +47,11 @@ function ReferralCard() {
   return (
     <div className="rounded-2xl border border-farm-border bg-gradient-to-b from-farm-surface-hi to-farm-surface p-4">
       <p className="font-semibold text-farm-text">Invitá amigos</p>
-      {!link ? (
+      {authLoading ? (
+        <p className="mt-1 text-sm text-farm-text-dim">Cargando tu perfil...</p>
+      ) : authError ? (
+        <p className="mt-1 text-sm text-farm-danger">No se pudo iniciar sesión: {authError}</p>
+      ) : !link ? (
         <p className="mt-1 text-sm text-farm-text-dim">
           Falta configurar <code>VITE_BOT_USERNAME</code> y <code>VITE_MINI_APP_SHORT_NAME</code> para generar tu link.
         </p>
