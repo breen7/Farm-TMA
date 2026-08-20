@@ -213,7 +213,7 @@ Con `npm run start:dev` corriendo, los logs de Nest muestran `WithdrawalsProcess
 
 ## TODO
 
-- [ ] **Devolver `WITHDRAWAL_MIN_USD` a un valor real en `backend/.env`** (quedó en `0.01` para poder probar un retiro chico contra TON testnet sin acumular 1000 bucks vía el simulador de ads — el default correcto de referencia es `1`, en `.env.example`). Hacer esto antes de cualquier cosa parecida a producción.
+- [x] **Devolver `WITHDRAWAL_MIN_USD` a un valor real en producción** — quedó en `2` USD en Railway y en `.env.example` (antes `0.01`, solo para probar un retiro chico contra TON testnet sin acumular 1000 bucks vía el simulador de ads). `backend/.env` local sigue en `0.01` a propósito, para seguir probando cómodo contra testnet.
 - [ ] Probar el flujo de retiros con `asset: USDT` contra un jetton de USDT real en testnet (se salteó — requiere encontrar la dirección de un jetton master de USDT válido en testnet).
 
 ## Limitaciones
