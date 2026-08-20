@@ -2,6 +2,15 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      El WebView de Telegram (sobre todo en Android) a veces cachea este HTML
+      de forma agresiva sin respetar prolijamente el Cache-Control de la
+      respuesta HTTP (ver vercel.json para ese lado) - estos meta tags son
+      una segunda capa para el mismo problema, no redundancia porque si.
+    -->
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
     <title>Genesis Ranch</title>
   </head>
