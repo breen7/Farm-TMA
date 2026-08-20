@@ -13,4 +13,13 @@ export default defineConfig({
     // Necesario para abrir la app dentro del webview de Telegram via un tunel (ngrok/cloudflared).
     allowedHosts: true,
   },
+  define: {
+    // Constantes horneadas en build time (no en runtime) para el panel de
+    // debug temporal — permiten confirmar desde la app misma que build esta
+    // corriendo realmente un cliente, sin depender de lo que devuelva curl
+    // contra el servidor (que puede diferir de lo que el WebView de Telegram
+    // sirve si hay cache de por medio).
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+    __BUILD_COMMIT__: JSON.stringify(process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local'),
+  },
 })
