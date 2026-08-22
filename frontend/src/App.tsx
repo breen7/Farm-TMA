@@ -3,7 +3,7 @@ import { FarmView } from './views/Farm';
 import { StorageView } from './views/Storage';
 import { TasksView } from './views/Tasks';
 import { WithdrawView } from './views/Withdraw';
-import { useCurrentUser } from './lib/auth';
+import { useAppState } from './lib/auth';
 
 type Tab = 'farm' | 'storage' | 'tasks' | 'withdraw';
 
@@ -16,7 +16,7 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('farm');
-  const { loading, error } = useCurrentUser();
+  const { loading, error } = useAppState();
 
   if (loading) {
     return (

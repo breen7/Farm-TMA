@@ -4,18 +4,12 @@ import { Farm, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TasksService } from '../tasks/tasks.service';
 import { ANIMAL_TIERS, RESOURCE_SELL_PRICES } from './farm.constants';
+import { computeProduction, HOUR_MS, ProductionRates, ProductionResult } from './farm-production.util';
 
-const HOUR_MS = 3_600_000;
 const INITIAL_STORAGE_CAPACITY = 1000; // debe coincidir con el @default() de Farm.storageCapacity en schema.prisma
 
-interface ProductionRates {
-  [resource: string]: number;
-}
-
-interface PendingProduction {
-  produced: Record<string, number>;
+interface PendingProduction extends ProductionResult {
   now: Date;
-  wasCapped: boolean;
 }
 
 @Injectable()
@@ -35,41 +29,23 @@ export class FarmService {
   }
 
   /**
-   * Produccion offline desde la ultima cosecha. El boost se prorratea segun
-   * su solapamiento real con la ventana [lastCollectedAt, now]; si el total
-   * generado excede storageCapacity, se recorta proporcionalmente entre
-   * recursos (silo lleno = se pierde el resto, como en Hay Day).
+   * Produccion offline desde la ultima cosecha. Wrapper delgado sobre
+   * computeProduction (farm-production.util.ts) — la formula en si vive ahi
+   * para que WorkerService pueda reusarla tal cual al simular las cosechas
+   * virtuales del calculo de ganancias offline del peon.
    */
   private computePendingProduction(farm: Farm): PendingProduction {
     const now = new Date();
-    const elapsedMs = Math.max(0, now.getTime() - farm.lastCollectedAt.getTime());
-
     const boostMultiplier = Number(this.config.get('BOOST_MULTIPLIER') ?? 2);
-    const boostEndMs =
-      farm.boostExpiresAt && farm.boostExpiresAt.getTime() > farm.lastCollectedAt.getTime()
-        ? Math.min(farm.boostExpiresAt.getTime(), now.getTime())
-        : farm.lastCollectedAt.getTime();
-    const boostedMs = Math.max(0, boostEndMs - farm.lastCollectedAt.getTime());
-    const normalMs = elapsedMs - boostedMs;
-
-    const rates = farm.productionRate as unknown as ProductionRates;
-    const raw: Record<string, number> = {};
-    let totalRaw = 0;
-    for (const [resource, rate] of Object.entries(rates)) {
-      const amount = rate * (normalMs / HOUR_MS) + rate * boostMultiplier * (boostedMs / HOUR_MS);
-      raw[resource] = amount;
-      totalRaw += amount;
-    }
-
-    const capacity = Number(farm.storageCapacity);
-    const scale = totalRaw > capacity && totalRaw > 0 ? capacity / totalRaw : 1;
-
-    const produced: Record<string, number> = {};
-    for (const [resource, amount] of Object.entries(raw)) {
-      produced[resource] = amount * scale;
-    }
-
-    return { produced, now, wasCapped: scale < 1 };
+    const { produced, wasCapped } = computeProduction({
+      productionRate: farm.productionRate as unknown as ProductionRates,
+      storageCapacity: Number(farm.storageCapacity),
+      lastCollectedAt: farm.lastCollectedAt,
+      boostExpiresAt: farm.boostExpiresAt,
+      boostMultiplier,
+      atTime: now,
+    });
+    return { produced, now, wasCapped };
   }
 
   async getInventory(userId: bigint) {

@@ -4,7 +4,7 @@ import { TonConnectUIProvider } from '@tonconnect/ui-react';
 import './index.css';
 import App from './App.tsx';
 import { bootstrapTelegram } from './lib/telegram';
-import { AuthProvider } from './lib/auth';
+import { AppStateProvider } from './lib/auth';
 
 // || (no ??): una VITE_TONCONNECT_MANIFEST_URL vacia en .env llega aca como
 // string vacio, no como undefined, y "" ?? fallback sigue siendo "" — eso es
@@ -20,9 +20,9 @@ bootstrapTelegram().catch((error) => console.error('No se pudo inicializar el SD
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <TonConnectUIProvider manifestUrl={manifestUrl}>
-      <AuthProvider>
+      <AppStateProvider>
         <App />
-      </AuthProvider>
+      </AppStateProvider>
     </TonConnectUIProvider>
   </StrictMode>,
 );

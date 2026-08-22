@@ -79,6 +79,16 @@ export function SendIcon() {
   );
 }
 
+export function WorkerIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="6" r="2.6" />
+      <path d="M6 21v-3.5A4.5 4.5 0 0 1 10.5 13h3A4.5 4.5 0 0 1 18 17.5V21" />
+      <path d="M9 13.5 7 21M15 13.5l2 7.5" />
+    </svg>
+  );
+}
+
 export function CheckIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-none stroke-current" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">

@@ -22,6 +22,8 @@ enum TxType {
   SINK_STORAGE
   SINK_ANIMAL_UPGRADE
   SINK_ROULETTE
+  SINK_WORKER
+  WORKER_AUTO_SELL
   WITHDRAWAL
   ADMIN_ADJUSTMENT
 }
@@ -74,6 +76,7 @@ model User {
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   farm                Farm?
+  worker              Worker?
   inventories         Inventory[]
   adImpressions       AdImpression[]
   transactions        Transaction[]
@@ -101,6 +104,26 @@ model Farm {
   createdAt         DateTime  @default(now()) @map("created_at")
 
   @@map("farms")
+}
+
+// Peon automatizado: cosecha y vende produccion de la granja solo, tanto en
+// tiempo real como (via processOfflineEarnings) retroactivamente al volver a
+// abrir la app. `level` 0 significa "no desbloqueado" — no hace falta una fila
+// separada de "desbloqueado si/no", el nivel ya lo codifica. La velocidad y
+// capacidad de cada nivel viven en codigo (worker.constants.ts, WORKER_TIERS),
+// mismo patron que ANIMAL_TIERS en farm.constants.ts, para no requerir una
+// migracion cada vez que se rebalancea la curva.
+model Worker {
+  id                  BigInt   @id @default(autoincrement())
+  userId              BigInt   @unique @map("user_id")
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level               Int      @default(0)
+  enabled             Boolean  @default(false)
+  lastProcessedAt     DateTime @default(now()) @map("last_processed_at")
+  lifetimeCoinsEarned Decimal  @default(0) @map("lifetime_coins_earned") @db.Decimal(20, 4)
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  @@map("workers")
 }
 
 model Inventory {

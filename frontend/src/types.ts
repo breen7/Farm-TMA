@@ -120,3 +120,38 @@ export interface AuthResponse {
   coinsBalance: string;
   bucksBalance: string;
 }
+
+export interface WorkerPayout {
+  coinsEarned: number;
+  cycles: number;
+}
+
+/**
+ * `lifetimeCoinsEarned` llega como string (mismo motivo que coinsBalance/
+ * storageCapacity: es un Decimal de Prisma serializado). `lastPayout` solo
+ * viene no-nulo en la respuesta que efectivamente proceso ciclos offline —
+ * ver AppStateProvider.clearWorkerPayout, que lo limpia despues de mostrarse
+ * una vez para que no reaparezca en cada refetch ni quede pegado en cache.
+ */
+export interface WorkerState {
+  unlocked: boolean;
+  enabled: boolean;
+  level: number;
+  walkSpeedMPerSec: number | null;
+  inventoryCapacity: number | null;
+  cycleDurationSec: number | null;
+  nextUpgradeCost: number | null;
+  lifetimeCoinsEarned: string;
+  lastPayout: WorkerPayout | null;
+}
+
+/** Forma de GET /me/state — bootstrap consolidado que reemplaza los fetches por-vista. */
+export interface BootstrapState {
+  user: AuthResponse;
+  farm: FarmState;
+  inventory: InventoryEntry[];
+  tasks: TaskEntry[];
+  referrals: ReferralTree;
+  withdrawals: WithdrawalRequestEntry[];
+  worker: WorkerState;
+}

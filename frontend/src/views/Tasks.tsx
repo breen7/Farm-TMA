@@ -1,24 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { shareURL } from '@telegram-apps/sdk-react';
 import { api, ApiError } from '../api/client';
-import { useCurrentUser } from '../lib/auth';
+import { useAppState } from '../lib/auth';
 import { buildReferralLink } from '../lib/referral';
 import { CheckIcon, CopyIcon, GiftIcon, ShareIcon } from '../lib/icons';
-import type { ClaimTaskResult, ReferralTree, TaskEntry } from '../types';
+import type { ClaimTaskResult } from '../types';
 
 function ReferralCard() {
-  const { user, loading: authLoading, error: authError } = useCurrentUser();
-  const [tree, setTree] = useState<ReferralTree | null>(null);
+  const { user, referrals: tree, loading: authLoading, error: authError } = useAppState();
   const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    api
-      .get<ReferralTree>('/referrals/tree')
-      .then(setTree)
-      .catch(() => {
-        // La tarjeta sigue siendo util (compartir el link) aunque no carguen los conteos.
-      });
-  }, []);
 
   useEffect(() => {
     if (!copied) return;
@@ -85,23 +75,14 @@ function ReferralCard() {
 }
 
 export function TasksView() {
-  const [tasks, setTasks] = useState<TaskEntry[] | null>(null);
+  const { tasks, error: bootstrapError, refetch, refetchIfStale } = useAppState();
   const [error, setError] = useState<string | null>(null);
   const [claimingCode, setClaimingCode] = useState<string | null>(null);
   const [lastClaim, setLastClaim] = useState<ClaimTaskResult | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      setTasks(await api.get<TaskEntry[]>('/tasks'));
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, []);
-
   useEffect(() => {
-    load();
-  }, [load]);
+    refetchIfStale();
+  }, [refetchIfStale]);
 
   useEffect(() => {
     if (!lastClaim) return;
@@ -115,7 +96,7 @@ export function TasksView() {
     try {
       const result = await api.post<ClaimTaskResult>(`/tasks/${code}/claim`);
       setLastClaim(result);
-      await load();
+      await refetch();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'No se pudo reclamar la recompensa.');
     } finally {
@@ -131,7 +112,9 @@ export function TasksView() {
 
       <ReferralCard />
 
-      {error && <p className="rounded-lg bg-farm-danger/20 p-2 text-sm text-farm-danger">{error}</p>}
+      {(error || bootstrapError) && (
+        <p className="rounded-lg bg-farm-danger/20 p-2 text-sm text-farm-danger">{error ?? bootstrapError}</p>
+      )}
       {lastClaim && (
         <p className="flex items-center gap-1.5 rounded-xl bg-farm-primary/20 p-2 text-sm text-farm-primary">
           <GiftIcon />

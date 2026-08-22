@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { TonConnectButton, useTonAddress } from '@tonconnect/ui-react';
 import { api, ApiError } from '../api/client';
+import { useAppState } from '../lib/auth';
 import { SendIcon } from '../lib/icons';
-import type { WithdrawalAsset, WithdrawalRequestEntry } from '../types';
+import type { WithdrawalAsset } from '../types';
 
 const STATUS_LABEL: Record<string, string> = {
   PENDING: 'Pendiente',
@@ -26,7 +27,8 @@ const STATUS_STYLE: Record<string, string> = {
 
 export function WithdrawView() {
   const tonAddress = useTonAddress();
-  const [history, setHistory] = useState<WithdrawalRequestEntry[]>([]);
+  const { withdrawals, error: bootstrapError, refetch, refetchIfStale } = useAppState();
+  const history = withdrawals ?? [];
   const [amountBucks, setAmountBucks] = useState('');
   const [asset, setAsset] = useState<WithdrawalAsset>('USDT');
   const [destinationWallet, setDestinationWallet] = useState('');
@@ -34,17 +36,9 @@ export function WithdrawView() {
   const [success, setSuccess] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const loadHistory = async () => {
-    try {
-      setHistory(await api.get<WithdrawalRequestEntry[]>('/withdrawals'));
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
   useEffect(() => {
-    loadHistory();
-  }, []);
+    refetchIfStale();
+  }, [refetchIfStale]);
 
   useEffect(() => {
     if (tonAddress && !destinationWallet) {
@@ -61,7 +55,7 @@ export function WithdrawView() {
       await api.post('/withdrawals', { amountBucks: Number(amountBucks), asset, destinationWallet });
       setSuccess('Retiro solicitado correctamente.');
       setAmountBucks('');
-      await loadHistory();
+      await refetch();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'No se pudo solicitar el retiro.');
     } finally {
@@ -117,7 +111,7 @@ export function WithdrawView() {
           />
         </label>
 
-        {error && <p className="text-sm text-farm-danger">{error}</p>}
+        {(error || bootstrapError) && <p className="text-sm text-farm-danger">{error ?? bootstrapError}</p>}
         {success && <p className="text-sm text-farm-primary">{success}</p>}
 
         <button

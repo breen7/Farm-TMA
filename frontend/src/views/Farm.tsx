@@ -1,12 +1,14 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { TonConnectButton, useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
 import { api, ApiError } from '../api/client';
 import { playSimulatedAd, useAdsgram } from '../lib/ads';
-import { useCurrentUser } from '../lib/auth';
+import { useAppState } from '../lib/auth';
 import { buildDepositTransaction } from '../lib/deposits';
 import { getResourceAccentColor, getResourceSprite } from '../lib/farmSprites';
-import { BasketIcon, BoltIcon, PlayIcon } from '../lib/icons';
-import type { AdRewardResult, CollectResult, DepositIntent, FarmState } from '../types';
+import { WORKER_HANDLING_TIME_SEC } from '../lib/workerEconomy';
+import { drawWorkerSprite, type WorkerAnimState } from '../lib/workerSprite';
+import { ArrowUpIcon, BasketIcon, BoltIcon, PlayIcon, WorkerIcon } from '../lib/icons';
+import type { AdRewardResult, CollectResult, DepositIntent, WorkerState } from '../types';
 
 const ADSGRAM_BLOCK_ID = import.meta.env.VITE_ADSGRAM_BLOCK_ID || '';
 
@@ -253,15 +255,228 @@ const FarmPlots = forwardRef<FarmPlotsHandle, FarmPlotsProps>(function FarmPlots
   );
 });
 
+const WORKER_LANE_PADDING = 22;
+
+/**
+ * Panel del Peón: contratar/mejorar/activar, y el carril animado que lo
+ * muestra caminando entre la parcela y el mercado. La animación es un reloj
+ * cosmético propio en el cliente (nunca decide cuanto gana el peon, eso
+ * siempre lo calcula `WorkerService.processOfflineEarnings` en el backend) —
+ * pero esta sincronizada al `cycleDurationSec` real que devuelve la API, asi
+ * que el ritmo visual no miente sobre el ritmo economico real.
+ */
+function WorkerPanel() {
+  const { worker, refetch } = useAppState();
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dataRef = useRef({ enabled: false, unlocked: false, cycleDurationSec: 30 });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    dataRef.current = {
+      enabled: worker?.enabled ?? false,
+      unlocked: worker?.unlocked ?? false,
+      cycleDurationSec: worker?.cycleDurationSec ?? 30,
+    };
+  }, [worker?.enabled, worker?.unlocked, worker?.cycleDurationSec]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+
+    let raf = 0;
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const { width, height } = canvas.getBoundingClientRect();
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    window.addEventListener('resize', resize);
+
+    const startTime = performance.now();
+
+    const draw = (time: number) => {
+      const { width, height } = canvas.getBoundingClientRect();
+      ctx.clearRect(0, 0, width, height);
+
+      const { enabled, unlocked, cycleDurationSec } = dataRef.current;
+      const laneLeft = WORKER_LANE_PADDING;
+      const laneRight = width - WORKER_LANE_PADDING;
+      const laneY = height * 0.62;
+      const spriteSize = height * 0.62;
+
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.moveTo(laneLeft, laneY);
+      ctx.lineTo(laneRight, laneY);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.font = `${height * 0.34}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.globalAlpha = unlocked && enabled ? 0.9 : 0.4;
+      ctx.fillText('🌾', laneLeft, laneY);
+      ctx.fillText('🪙', laneRight, laneY);
+      ctx.restore();
+
+      if (!unlocked) {
+        drawWorkerSprite(ctx, (laneLeft + laneRight) / 2, laneY, spriteSize, 0.3, {
+          time,
+          state: 'idle',
+          facingRight: true,
+          loadFraction: 0,
+        });
+      } else if (!enabled) {
+        drawWorkerSprite(ctx, laneLeft + 20, laneY, spriteSize, 0.55, {
+          time,
+          state: 'idle',
+          facingRight: true,
+          loadFraction: 0,
+        });
+      } else {
+        const cycleMs = Math.max(cycleDurationSec, 4) * 1000;
+        const handlingMs = Math.min(WORKER_HANDLING_TIME_SEC * 1000, cycleMs * 0.6);
+        const walkEachMs = (cycleMs - handlingMs) / 2;
+        const handleEachMs = handlingMs / 2;
+        const elapsed = (time - startTime) % cycleMs;
+
+        let animState: WorkerAnimState;
+        let laneProgress: number; // 0 = en la parcela, 1 = en el mercado
+        let loadFraction: number;
+
+        if (elapsed < walkEachMs) {
+          animState = 'walking-to-field';
+          laneProgress = 1 - elapsed / walkEachMs;
+          loadFraction = 0;
+        } else if (elapsed < walkEachMs + handleEachMs) {
+          animState = 'harvesting';
+          laneProgress = 0;
+          loadFraction = (elapsed - walkEachMs) / handleEachMs;
+        } else if (elapsed < walkEachMs * 2 + handleEachMs) {
+          animState = 'walking-to-market';
+          laneProgress = (elapsed - walkEachMs - handleEachMs) / walkEachMs;
+          loadFraction = 1;
+        } else {
+          animState = 'selling';
+          laneProgress = 1;
+          loadFraction = 1 - (elapsed - walkEachMs * 2 - handleEachMs) / handleEachMs;
+        }
+
+        const facingRight = animState === 'walking-to-market' || animState === 'selling';
+        const spriteX = laneLeft + (laneRight - laneLeft) * laneProgress;
+
+        drawWorkerSprite(ctx, spriteX, laneY, spriteSize, 1, { time, state: animState, facingRight, loadFraction });
+      }
+
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
+
+  if (!worker) return null;
+
+  const runAction = async (action: () => Promise<unknown>, fallbackMessage: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      await refetch();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : fallbackMessage);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unlock = () => runAction(() => api.post<WorkerState>('/worker/unlock'), 'No se pudo contratar al peón.');
+  const upgrade = () => runAction(() => api.post<WorkerState>('/worker/upgrade'), 'No se pudo mejorar al peón.');
+  const toggle = () =>
+    runAction(() => api.patch<WorkerState>('/worker', { enabled: !worker.enabled }), 'No se pudo cambiar el estado del peón.');
+
+  return (
+    <div className="rounded-2xl border border-farm-border bg-gradient-to-b from-farm-surface-hi to-farm-surface p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/40 text-farm-text-dim">
+            <WorkerIcon />
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-farm-text">Peón{worker.unlocked ? ` · Nivel ${worker.level}` : ''}</p>
+            {worker.unlocked && (
+              <p className="text-xs text-farm-text-dim">
+                {worker.walkSpeedMPerSec?.toFixed(1)} m/s · carga {worker.inventoryCapacity} · {worker.cycleDurationSec?.toFixed(0)}s/viaje
+              </p>
+            )}
+          </div>
+        </div>
+        {worker.unlocked && (
+          <button
+            onClick={toggle}
+            disabled={busy}
+            aria-label={worker.enabled ? 'Desactivar peón' : 'Activar peón'}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+              worker.enabled ? 'bg-farm-primary' : 'bg-black/40'
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                worker.enabled ? 'translate-x-5' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        )}
+      </div>
+
+      <canvas ref={canvasRef} className="mt-3 h-20 w-full" />
+
+      {error && <p className="mt-2 text-sm text-farm-danger">{error}</p>}
+
+      {!worker.unlocked ? (
+        <button
+          onClick={unlock}
+          disabled={busy}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-farm-accent py-2 text-sm font-semibold text-farm-bg disabled:opacity-50"
+        >
+          <WorkerIcon />
+          Contratar peón ({worker.nextUpgradeCost} coins)
+        </button>
+      ) : worker.nextUpgradeCost !== null ? (
+        <button
+          onClick={upgrade}
+          disabled={busy}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-amber-400/80 py-2 text-sm font-semibold text-amber-300 disabled:opacity-50"
+        >
+          <ArrowUpIcon />
+          Mejorar ({worker.nextUpgradeCost} coins)
+        </button>
+      ) : (
+        <p className="mt-3 text-center text-xs text-farm-text-dim">Nivel máximo</p>
+      )}
+    </div>
+  );
+}
+
 /** Tiempo estimado hasta que el postback server-a-server de Adsgram nos llega y acredita la recompensa. */
 const AD_CREDIT_GRACE_MS = 4000;
 
-function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
+function AdSimulator({ onRewarded }: { onRewarded: () => Promise<void> }) {
   const [status, setStatus] = useState<'idle' | 'playing' | 'confirming' | 'reward' | 'error' | 'unavailable'>('idle');
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [rewardBalance, setRewardBalance] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { refresh: refreshUser } = useCurrentUser();
   const showRealAd = useAdsgram(ADSGRAM_BLOCK_ID || undefined);
 
   /**
@@ -286,9 +501,8 @@ function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
       await showRealAd();
       setStatus('confirming');
       await new Promise((resolve) => setTimeout(resolve, AD_CREDIT_GRACE_MS));
-      await refreshUser();
+      await onRewarded();
       setStatus('reward');
-      onRewarded();
     } catch (err) {
       if (import.meta.env.PROD) {
         setStatus('unavailable');
@@ -308,7 +522,7 @@ function AdSimulator({ onRewarded }: { onRewarded: () => void }) {
       const result = await api.post<AdRewardResult>('/ads/simulate', { network: 'adsgram' });
       setRewardBalance(result.bucksBalance);
       setStatus('reward');
-      onRewarded();
+      await onRewarded();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'No se pudo acreditar la recompensa.');
       setStatus('error');
@@ -463,32 +677,41 @@ function DepositBoostButton({ onGranted }: { onGranted: () => void }) {
 }
 
 export function FarmView() {
-  const [state, setState] = useState<FarmState | null>(null);
+  const { farm: state, worker, error: bootstrapError, refetch, refetchFarm, clearWorkerPayout } = useAppState();
   const [error, setError] = useState<string | null>(null);
+  const [workerNotice, setWorkerNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const plotsHandleRef = useRef<FarmPlotsHandle>(null);
 
-  const load = useCallback(async () => {
-    try {
-      setState(await api.get<FarmState>('/farm'));
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, []);
+  useEffect(() => {
+    refetchFarm();
+    const interval = setInterval(refetchFarm, 5000);
+    return () => clearInterval(interval);
+  }, [refetchFarm]);
+
+  // Se dispara cuando /me/state trae un lastPayout fresco (el peon proceso
+  // ciclos offline en esta misma respuesta) — clearWorkerPayout lo limpia del
+  // estado compartido para que no vuelva a aparecer en el proximo refetch ni
+  // quede pegado en el cache local.
+  useEffect(() => {
+    if (!worker?.lastPayout) return;
+    const { coinsEarned, cycles } = worker.lastPayout;
+    setWorkerNotice(`Tu peón trabajó mientras no estabas: +${coinsEarned.toFixed(2)} coins (${cycles} viaje${cycles === 1 ? '' : 's'})`);
+    clearWorkerPayout();
+  }, [worker?.lastPayout, clearWorkerPayout]);
 
   useEffect(() => {
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, [load]);
+    if (!workerNotice) return;
+    const timeout = setTimeout(() => setWorkerNotice(null), 5000);
+    return () => clearTimeout(timeout);
+  }, [workerNotice]);
 
   const collect = async () => {
     setBusy(true);
     try {
       const result = await api.post<CollectResult>('/farm/collect');
       plotsHandleRef.current?.celebrateCollect(result.collected);
-      await load();
+      await refetch();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -500,7 +723,7 @@ export function FarmView() {
     setBusy(true);
     try {
       await api.post('/farm/boost');
-      await load();
+      await refetch();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -520,7 +743,10 @@ export function FarmView() {
         )}
       </header>
 
-      {error && <p className="rounded-lg bg-farm-danger/20 p-2 text-sm text-farm-danger">{error}</p>}
+      {(error || bootstrapError) && (
+        <p className="rounded-lg bg-farm-danger/20 p-2 text-sm text-farm-danger">{error ?? bootstrapError}</p>
+      )}
+      {workerNotice && <p className="rounded-lg bg-farm-primary/20 p-2 text-sm text-farm-primary">{workerNotice}</p>}
 
       {state && (
         <FarmPlots
@@ -532,7 +758,9 @@ export function FarmView() {
         />
       )}
 
-      <AdSimulator onRewarded={load} />
+      <WorkerPanel />
+
+      <AdSimulator onRewarded={refetch} />
 
       {state && (
         <div className="grid grid-cols-3 gap-2">
@@ -568,7 +796,7 @@ export function FarmView() {
         </button>
       </div>
 
-      <DepositBoostButton onGranted={load} />
+      <DepositBoostButton onGranted={refetch} />
     </div>
   );
 }

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api/client';
-import { useCurrentUser } from '../lib/auth';
+import { useAppState } from '../lib/auth';
 import { RESOURCE_SELL_PRICES } from '../lib/farmEconomy';
 import { ArrowUpIcon, CoinIcon } from '../lib/icons';
-import type { FarmState, InventoryEntry, SellResult, UpgradeAnimalResult, UpgradeStorageResult } from '../types';
+import type { InventoryEntry, SellResult, UpgradeAnimalResult, UpgradeStorageResult } from '../types';
 
 const RESOURCE_EMOJI: Record<string, string> = {
   wheat: '🌾',
@@ -17,32 +17,17 @@ const ANIMAL_INFO: Record<string, { name: string; icon: string }> = {
 };
 
 export function StorageView() {
-  const { user, refresh: refreshUser } = useCurrentUser();
-  const [farm, setFarm] = useState<FarmState | null>(null);
-  const [inventory, setInventory] = useState<InventoryEntry[]>([]);
+  const { user, farm, inventory: bootstrapInventory, error: bootstrapError, refetch, refetchIfStale } = useAppState();
+  const inventory = bootstrapInventory ?? [];
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [sellingResource, setSellingResource] = useState<string | null>(null);
   const [upgrading, setUpgrading] = useState(false);
   const [upgradingAnimal, setUpgradingAnimal] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const [farmState, inventoryList] = await Promise.all([
-        api.get<FarmState>('/farm'),
-        api.get<InventoryEntry[]>('/farm/inventory'),
-      ]);
-      setFarm(farmState);
-      setInventory(inventoryList);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, []);
-
   useEffect(() => {
-    load();
-  }, [load]);
+    refetchIfStale();
+  }, [refetchIfStale]);
 
   useEffect(() => {
     if (!notice) return;
@@ -59,7 +44,7 @@ export function StorageView() {
     try {
       const result = await api.post<SellResult>('/farm/sell', { resource: entry.resource, quantity });
       setNotice(`Vendiste ${result.quantitySold.toFixed(2)} de ${result.resource} por ${result.coinsEarned.toFixed(2)} coins`);
-      await Promise.all([load(), refreshUser()]);
+      await refetch();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'No se pudo vender el recurso.');
     } finally {
@@ -73,7 +58,7 @@ export function StorageView() {
     try {
       const result = await api.post<UpgradeStorageResult>('/farm/upgrade-storage');
       setNotice(`Silo mejorado a ${Number(result.storageCapacity).toFixed(0)} · próxima mejora: ${result.nextUpgradeCost} coins`);
-      await Promise.all([load(), refreshUser()]);
+      await refetch();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'No se pudo mejorar el silo.');
     } finally {
@@ -88,7 +73,7 @@ export function StorageView() {
       const result = await api.post<UpgradeAnimalResult>('/farm/upgrade-animal', { resource });
       const name = ANIMAL_INFO[resource]?.name ?? resource;
       setNotice(`${name} mejorada a Tier ${result.tier} · nueva tasa: ${(result.productionRate[resource] ?? 0).toFixed(2)}/h`);
-      await Promise.all([load(), refreshUser()]);
+      await refetch();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'No se pudo mejorar el animal.');
     } finally {
@@ -112,7 +97,9 @@ export function StorageView() {
         )}
       </header>
 
-      {error && <p className="rounded-lg bg-farm-danger/20 p-2 text-sm text-farm-danger">{error}</p>}
+      {(error || bootstrapError) && (
+        <p className="rounded-lg bg-farm-danger/20 p-2 text-sm text-farm-danger">{error ?? bootstrapError}</p>
+      )}
       {notice && <p className="rounded-lg bg-farm-primary/20 p-2 text-sm text-farm-primary">{notice}</p>}
 
       {farm && (

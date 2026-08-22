@@ -14,6 +14,8 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
 import { AdminModule } from './admin/admin.module';
 import { TasksModule } from './tasks/tasks.module';
 import { DepositsModule } from './deposits/deposits.module';
+import { MeModule } from './me/me.module';
+import { WorkerModule } from './worker/worker.module';
 
 @Module({
   imports: [
@@ -50,6 +52,8 @@ import { DepositsModule } from './deposits/deposits.module';
     AdminModule,
     TasksModule,
     DepositsModule,
+    MeModule,
+    WorkerModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
