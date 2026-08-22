@@ -15,7 +15,13 @@ import { KeyPair, mnemonicToPrivateKey } from '@ton/crypto';
 
 const JETTON_TRANSFER_OPCODE = 0xf8a7ea5; // TEP-74
 const JETTON_FORWARD_TON_AMOUNT = toNano('0.01');
-const JETTON_GAS_AMOUNT = toNano('0.05');
+// El jetton wallet destino exige (TEP-74, chequeo estandar en send_tokens):
+// msg_value > forward_ton_amount + fwd_count*fwd_fee + 2*gas_consumption() +
+// min_tons_for_storage(). 0.05 TON quedaba justo en el limite y abortaba con
+// exit code 709 (fondos insuficientes) al probarlo de verdad contra un
+// jetton en testnet — nunca se habia ejercitado este camino antes (ver
+// README, "Probar el flujo de retiros con asset: USDT"). Subido con margen.
+const JETTON_GAS_AMOUNT = toNano('0.15');
 const COMMENT_OPCODE = 0; // "simple transfer with comment" segun convencion TON
 // Un mensaje interno de TON descuenta el forward fee de red antes de
 // acreditarse en destino, asi que lo que se ve en `inMessage.value.coins` es
@@ -80,7 +86,7 @@ export class TonService {
 
   /** Envia TON nativo. amountNano en nanoTON (1 TON = 1e9 nanoTON). */
   async sendTon(destinationWallet: string, amountNano: bigint): Promise<string> {
-    const { client, wallet, keyPair } = await this.getWallet();
+    const { wallet, keyPair } = await this.getWallet();
     const seqno = await wallet.getSeqno();
 
     await wallet.sendTransfer({
@@ -90,7 +96,7 @@ export class TonService {
       sendMode: SendMode.PAY_GAS_SEPARATELY,
     });
 
-    return this.confirmAndGetHash(client, wallet, seqno);
+    return this.confirmAndGetHash(wallet, seqno, 'TON', destinationWallet, amountNano);
   }
 
   /** Envia USDT (jetton transfer segun TEP-74). amountUnits en unidades minimas (6 decimales). */
@@ -119,7 +125,7 @@ export class TonService {
       sendMode: SendMode.PAY_GAS_SEPARATELY,
     });
 
-    return this.confirmAndGetHash(client, wallet, seqno);
+    return this.confirmAndGetHash(wallet, seqno, 'USDT', destinationWallet, amountUnits);
   }
 
   /**
@@ -224,22 +230,42 @@ export class TonService {
 
   /**
    * Confirma el envio esperando a que el seqno de la wallet avance (prueba de
-   * que el mensaje salio de la wallet) y recupera el hash de la transaccion
-   * mas reciente para dejar constancia en el registro del retiro.
+   * que el mensaje salio de la wallet) y despues identifica la transaccion
+   * exacta del pago reusando `findRecentPayment` (misma decodificacion que
+   * usa el sweep de reconciliacion) en vez de asumir que es "la ultima
+   * transaccion de la wallet". Esa suposicion era incorrecta para USDT: la
+   * jetton wallet devuelve el TON de gas sobrante en un mensaje de "excess"
+   * que llega en una transaccion posterior y puede ganarle la carrera al
+   * polling, dejando guardado el hash del vuelto en vez del de la
+   * transferencia real (bug encontrado probando esto de punta a punta contra
+   * testnet — ver README). Si el seqno ya avanzo pero `findRecentPayment`
+   * todavia no ve la transaccion (indexado con lag), se sigue reintentando
+   * en vez de devolver un hash equivocado.
    */
   private async confirmAndGetHash(
-    client: TonClient,
     wallet: OpenedContract<WalletContractV4>,
     previousSeqno: number,
+    asset: 'TON' | 'USDT',
+    destinationWallet: string,
+    expectedAmount: bigint,
     timeoutMs = 90_000,
   ): Promise<string> {
+    const sinceUnixSeconds = Math.floor(Date.now() / 1000) - 60;
     const start = Date.now();
+    let seqnoConfirmed = false;
+
     while (Date.now() - start < timeoutMs) {
       await new Promise((resolve) => setTimeout(resolve, 4000));
-      const seqno = await wallet.getSeqno();
-      if (seqno > previousSeqno) {
-        const [latestTx] = await client.getTransactions(wallet.address, { limit: 1 });
-        return latestTx.hash().toString('hex');
+
+      if (!seqnoConfirmed) {
+        const seqno = await wallet.getSeqno();
+        if (seqno <= previousSeqno) continue;
+        seqnoConfirmed = true;
+      }
+
+      const txHash = await this.findRecentPayment(asset, destinationWallet, expectedAmount, sinceUnixSeconds);
+      if (txHash) {
+        return txHash;
       }
     }
     throw new Error('Timed out waiting for TON transaction confirmation');

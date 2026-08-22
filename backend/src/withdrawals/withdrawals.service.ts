@@ -29,12 +29,20 @@ export class WithdrawalsService {
   }
 
   /**
-   * Valida fondos, umbral minimo, solvencia del pool y riesgo del usuario; si
-   * pasa esas validaciones y es de bajo riesgo la encola de inmediato, si no
-   * queda en RISK_REVIEW a la espera de revision manual (modulo admin,
-   * todavia no implementado).
+   * Valida fondos, umbral minimo, solvencia del pool, tope diario y riesgo
+   * del usuario; si pasa esas validaciones y es de bajo riesgo la encola de
+   * inmediato, si no queda en RISK_REVIEW a la espera de revision manual.
    */
   async requestWithdrawal(userId: bigint, dto: CreateWithdrawalDto) {
+    if (this.config.get('WITHDRAWALS_PAUSED') === 'true') {
+      throw new BadRequestException('Withdrawals are temporarily paused, try again later');
+    }
+
+    const enabledAssets = this.getEnabledAssets();
+    if (!enabledAssets.includes(dto.asset)) {
+      throw new BadRequestException(`Withdrawals in ${dto.asset} are not currently available`);
+    }
+
     try {
       Address.parse(dto.destinationWallet);
     } catch {
@@ -55,6 +63,8 @@ export class WithdrawalsService {
     if (Number(user.bucksBalance) < dto.amountBucks) {
       throw new BadRequestException('Insufficient bucks balance');
     }
+
+    await this.assertWithinDailyLimit(userId, amountUsd);
 
     const hasLiquidity = await this.pool.hasSufficientLiquidity(amountUsd);
     if (!hasLiquidity) {
@@ -101,6 +111,48 @@ export class WithdrawalsService {
     }
 
     return withdrawal;
+  }
+
+  /**
+   * Assets habilitados para retirar ahora mismo. Config-driven (no un enum
+   * fijo en código) a propósito: mientras no haya un oráculo de precio real
+   * para TON_USD_RATE, mainnet arranca con `WITHDRAWAL_ENABLED_ASSETS=USDT`
+   * — reactivar TON nativo despues es un cambio de env var, no de código.
+   */
+  private getEnabledAssets(): string[] {
+    const raw = this.config.get<string>('WITHDRAWAL_ENABLED_ASSETS') ?? 'TON,USDT';
+    return raw
+      .split(',')
+      .map((asset) => asset.trim().toUpperCase())
+      .filter(Boolean);
+  }
+
+  /**
+   * Tope acumulado de retiros por usuario en una ventana movil de 24h. Cuenta
+   * todo lo que ya debito bucks del usuario y no se reembolso todavia
+   * (QUEUED/RISK_REVIEW/PROCESSING/COMPLETED) — REJECTED y FAILED quedan
+   * afuera porque ese monto ya volvio al balance del usuario via
+   * `creditRefund`, no representa salida real de fondos.
+   */
+  private async assertWithinDailyLimit(userId: bigint, amountUsd: number): Promise<void> {
+    const dailyLimitUsd = Number(this.config.get('WITHDRAWAL_DAILY_LIMIT_USD_PER_USER') ?? 50);
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const recent = await this.prisma.withdrawalRequest.aggregate({
+      where: {
+        userId,
+        createdAt: { gte: since },
+        status: { notIn: ['REJECTED', 'FAILED'] },
+      },
+      _sum: { amountUsd: true },
+    });
+
+    const alreadyUsedUsd = Number(recent._sum.amountUsd ?? 0);
+    if (alreadyUsedUsd + amountUsd > dailyLimitUsd) {
+      throw new BadRequestException(
+        `Daily withdrawal limit of $${dailyLimitUsd} exceeded (already used $${alreadyUsedUsd.toFixed(2)} in the last 24h)`,
+      );
+    }
   }
 
   /**
